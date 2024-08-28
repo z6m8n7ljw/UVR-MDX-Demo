@@ -1,0 +1,7 @@
+/dist
+
+/node_modules
+
+/pyodide
+
+/package-lock.json
