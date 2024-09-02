@@ -3,6 +3,7 @@ import TerserPlugin from 'terser-webpack-plugin';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { PyodidePlugin } from "@pyodide/webpack-plugin";
+import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,7 +47,11 @@ export default {
         static: {
             directory: __dirname
         },
-        port: 8080
+        port: 8080,
+        https: {
+            key: fs.readFileSync('key.pem'),
+            cert: fs.readFileSync('cert.pem'),
+        },
     },
     experiments: {
         outputModule: true,

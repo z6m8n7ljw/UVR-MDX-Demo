@@ -23,8 +23,8 @@ let vocalBlob, bgmBlob;
 
 function log(i) {
     const newLine = document.createElement('div');
-    newLine.innerText = i;
-    newLine.id = i.trim();
+    newLine.innerText = String(i);
+    newLine.id = String(i).trim();
     document.getElementById('status').appendChild(newLine);
 }
 
@@ -197,10 +197,10 @@ async function processAudio() {
             const separatorInstance = Separator(args);
             const audioDataNdarray = np.array(audioData);
 
+            const start = performance.now();
+
             const segmentedMix = separatorInstance.segment(audioDataNdarray);
             const segmentedMix_js = segmentedMix.toJs();
-
-            const start = performance.now();
 
             let opt = [[], []];
             for (let [skip, cmix] of segmentedMix_js) {

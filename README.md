@@ -14,7 +14,7 @@ Ensure that you have [Node.js](https://nodejs.org/) installed on your machine.
 
 ### Installation
 
-1. Install the required dependencies:
+Install the required dependencies:
 
 ```sh
 npm install
@@ -22,7 +22,7 @@ npm install
 
 ### Building the Project
 
-1. Bundle the code using webpack:
+Bundle the code using webpack:
 
 ```sh
 npm run build
@@ -41,3 +41,16 @@ Start a web server to serve the current folder at http://localhost:8080/. To sta
 ```sh
 npm run dev
 ```
+
+**[Option]** Generate SSL certificate for local development to activate HTTPS if Cache Storage is not working with HTTP:
+```sh
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+```
+This configuration is used by `devServer` in `webpack.config.js`:
+```
+https: {
+    key: fs.readFileSync('key.pem'),
+    cert: fs.readFileSync('cert.pem'),
+}
+```
+
