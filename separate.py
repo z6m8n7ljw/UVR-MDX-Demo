@@ -2,6 +2,34 @@
 import numpy as np
 import scipy
 
+def numpy_hann(M, sym=True):
+    """
+    使用 NumPy 实现 Hann 窗函数
+    
+    Parameters:
+    -----------
+    M : int
+        窗长度
+    sym : bool
+        是否对称。True 表示对称窗，False 表示周期窗
+        
+    Returns:
+    --------
+    w : ndarray
+        Hann 窗系数
+    """
+    if not sym:
+        M = M + 1
+
+    n = np.arange(M)
+    w = 0.5 * (1 - np.cos(2 * np.pi * n / (M-1)))
+
+    if not sym:
+        w = w[:-1]
+        
+    return w
+
+
 class ConvTDFNet:
     def __init__(self, target_name, L, dim_f, dim_t, n_fft, hop=1024):
         super(ConvTDFNet, self).__init__()
@@ -13,7 +41,8 @@ class ConvTDFNet:
         self.n_bins = self.n_fft // 2 + 1
         self.chunk_size = hop * (self.dim_t - 1)
         # self.window = torch.hann_window(window_length=self.n_fft, periodic=True)
-        self.window = scipy.signal.windows.hann(self.n_fft, sym=False)
+        # self.window = scipy.signal.windows.hann(self.n_fft, sym=False)
+        self.window = numpy_hann(self.n_fft, sym=False)
         self.target_name = target_name
         
         out_c = self.dim_c * 4 if target_name == "*" else self.dim_c
@@ -23,7 +52,7 @@ class ConvTDFNet:
         self.n = L // 2
 
     def stft(self, x):
-        x = x.reshape([-1, self.chunk_size])  # [B, L]
+        x = x.reshape(-1, self.chunk_size)  # [B, L]
         # x = torch.stft(
         #     x,
         #     n_fft=self.n_fft,
@@ -32,10 +61,10 @@ class ConvTDFNet:
         #     center=True,
         #     return_complex=True,
         # )
-        output = []
-        for i in range(x.shape[0]):
+
+        def compute_stft(segment):
             f, t, Zxx = scipy.signal.stft(
-                x[i],
+                segment,
                 nperseg=self.n_fft,
                 noverlap=self.n_fft - self.hop,
                 window=self.window,
@@ -43,14 +72,16 @@ class ConvTDFNet:
                 boundary='zeros',
             )
             Zxx *= (np.float32(self.n_fft) / 2.0)
-            output.append(Zxx)
-        x = np.array(output, dtype=np.complex64)   # [B, N, T]
-        # x = torch.view_as_real(x)
-        x = np.stack((x.real, x.imag), axis=-1)  # [B, N, T, 2]
+            return Zxx
+
+        Zxx = np.apply_along_axis(compute_stft, 1, x)
+        Zxx_real = Zxx.real.astype(np.float32)
+        Zxx_imag = Zxx.imag.astype(np.float32)
+        x = np.stack((Zxx_real, Zxx_imag), axis=-1)  # [B, N, T, 2]
         # x = x.permute([0, 3, 1, 2])
         x = np.transpose(x, [0, 3, 1, 2])  # [B, 2, N, T]
         # x = x.reshape([-1, 2, 2, self.n_bins, self.dim_t]).reshape([-1, self.dim_c, self.n_bins, self.dim_t])
-        x = x.reshape([-1, 2, 2, self.n_bins, self.dim_t]).reshape([-1, self.dim_c, self.n_bins, self.dim_t])  # [B, C, N, T]
+        x = x.reshape(-1, self.dim_c, self.n_bins, self.dim_t)  # [B, C, N, T]
         return x[:, :, : self.dim_f]
 
     # Inversed Short-time Fourier transform (STFT).
@@ -60,21 +91,17 @@ class ConvTDFNet:
         #     if freq_pad is None
         #     else freq_pad
         # )
-        freq_pad = (
-            np.tile(self.freq_pad, (x.shape[0], 1, 1, 1))
-            if freq_pad is None
-            else freq_pad
-        )
+        if freq_pad is None:
+            freq_pad = np.tile(self.freq_pad, (x.shape[0], 1, 1, 1))
         # x = torch.cat([x, freq_pad], -2)
         x = np.concatenate([x, freq_pad], axis=-2)
         c = 4 * 2 if self.target_name == "*" else 2
-        x = x.reshape([-1, c, 2, self.n_bins, self.dim_t]).reshape(
-            [-1, 2, self.n_bins, self.dim_t]
-        )
+        new_shape = [-1, c, 2, self.n_bins, self.dim_t]
+        x = x.reshape(new_shape)
         # x = x.permute([0, 2, 3, 1])
+        x = x.reshape([-1, 2, self.n_bins, self.dim_t])
         x = np.transpose(x, [0, 2, 3, 1])
         # x = x.contiguous()
-        x = np.ascontiguousarray(x)
         # x = torch.view_as_complex(x)
         x = x[..., 0] + 1j * x[..., 1]
         # x = torch.istft(
@@ -131,19 +158,17 @@ class Separator:
         gen_size = trans.chunk_size - 2 * self.trim
         self.pad = gen_size - n_sample % gen_size
 
-        mix_p = np.concatenate(
-            (np.zeros((2, self.trim)), cmix, np.zeros((2, self.pad)), np.zeros((2, self.trim))), 1
-        )
+        mix_p = np.zeros((2, n_sample + 2 * self.trim + self.pad), dtype=cmix.dtype)
+        mix_p[:, self.trim:self.trim + n_sample] = cmix
 
-        mix_waves = []
-        i = 0
-        while i < n_sample + self.pad:
-            waves = np.array(mix_p[:, i : i + trans.chunk_size])
-            mix_waves.append(waves)
-            i += gen_size
+        total_chunks = (n_sample + self.pad) // gen_size
+        mix_waves = np.empty((total_chunks, 2, trans.chunk_size), dtype=cmix.dtype)
+        for i in range(total_chunks):
+            start = i * gen_size
+            mix_waves[i] = mix_p[:, start:start + trans.chunk_size]
 
         # mix_waves = torch.tensor(np.array(mix_waves), dtype=torch.float32)
-        mix_waves = np.array(mix_waves).astype(np.float32)
+        mix_waves = mix_waves.astype(np.float32)
         spek = trans.stft(mix_waves)
         self.dims = spek.shape
         # return spek.cpu().numpy()
@@ -158,11 +183,8 @@ class Separator:
         #     .reshape(2, -1)
         #     .numpy()[:, :-self.pad]
         # )
-        tar_signal = (
-            np.transpose(tar_waves[:, :, self.trim:-self.trim], (1, 0, 2))
-            .reshape(2, -1) 
-            [:, :-self.pad]
-        )
+        tar_waves_trimmed = tar_waves[:, :, self.trim:-self.trim]
+        tar_signal = tar_waves_trimmed.transpose(1, 0, 2).reshape(2, -1)[:, :-self.pad]
 
         start = 0 if mix == 0 else self.args["margin"]
         end = None if mix == self.last_skip else -self.args["margin"]
@@ -170,4 +192,4 @@ class Separator:
         if self.args["margin"] == 0:
             end = None
 
-        return tar_signal[:, start:end]
+        return np.ascontiguousarray(tar_signal[:, start:end])

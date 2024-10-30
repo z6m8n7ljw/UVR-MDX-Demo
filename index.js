@@ -5,7 +5,7 @@ import { encode } from "wav-encoder";
 const MODELS = {
     audio_separator: [
         {
-            name: "UVR_MDXNET_Inst_Main",
+            name: "Audio Separator Model",
             url: "https://huggingface.co/seanghay/uvr_models/resolve/main/UVR-MDX-NET-Inst_Main.onnx",
             size: 52.8,
         }
@@ -48,7 +48,7 @@ function getConfig() {
         model: "audio_separator",
         provider: "webgpu",
         device: "gpu",
-        threads: "1",
+        threads: "8",
     };
     let vars = query.split("&");
     for (var i = 0; i < vars.length; i++) {
@@ -103,13 +103,21 @@ async function load_models(models) {
     } else {
         log("Loading...\n\n");
     }
+    const cpuCores = navigator.hardwareConcurrency;
+    if (cpuCores > 0) {
+        log(`CPU Cores: ${cpuCores}\n\n`);
+    }
     const start = performance.now();
     for (const [name, model] of Object.entries(models)) {
         try {
             const opt = {
                 executionProviders: [config.provider],
-                enableMemPattern: false,
-                enableCpuMemArena: false,
+                enableMemPattern: true,
+                enableCpuMemArena: true,
+                interOpNumThreads: 8,
+                executionMode: 'parallel',
+                logSeverityLevel: 3,
+                enableProfiling: false,
                 extra: {
                     session: {
                         disable_prepacking: "1",
@@ -172,7 +180,7 @@ async function processAudio() {
 
     try {
         let pyodide = await loadPyodide({
-            indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+            indexURL: "pyodide/",
         });
     
         await pyodide.loadPackage(['numpy', 'scipy']);
@@ -200,34 +208,42 @@ async function processAudio() {
             const start = performance.now();
 
             const segmentedMix = separatorInstance.segment(audioDataNdarray);
-            const segmentedMix_js = segmentedMix.toJs();
 
-            let opt = [[], []];
-            for (let [skip, cmix] of segmentedMix_js) {
-                const cmixNdarray = np.array(cmix)
-                const modelInput = separatorInstance.preprocess(cmixNdarray);
+            let opt = [new Float32Array(), new Float32Array()];
+            for (let skip of segmentedMix.keys()) {
+                const cmix = segmentedMix.get(skip);
+                const modelInput = separatorInstance.preprocess(cmix);
                 let buffer = modelInput.getBuffer("f32");
                 modelInput.destroy();
-                const inputTensor = new ort.Tensor(new Float32Array(buffer.data), buffer.shape);
+
                 let specPred;
-                if (args.toJs().denoise) {
-                    const negInput = new ort.Tensor(inputTensor.data.map(x => -x), inputTensor.dims);
-                    const negResult = await session.run({ "input": negInput });
-                    const posResult = await session.run({ "input": inputTensor });
-            
-                    specPred = negResult.output.data.map((val, idx) => -val * 0.5 + posResult.output.data[idx] * 0.5);
-                } else {
-                    const result = await session.run({ "input": inputTensor });
-                    specPred = result.output.data;
+                try {
+                    const inputTensor = new ort.Tensor(new Float32Array(buffer.data), buffer.shape);
+                    if (args.toJs().denoise) {
+                        const negInput = new ort.Tensor(inputTensor.data.map(x => -x), inputTensor.dims);
+                        const negResult = await session.run({ "input": negInput });
+                        const posResult = await session.run({ "input": inputTensor });
+                
+                        specPred = negResult.output.data.map((val, idx) => -val * 0.5 + posResult.output.data[idx] * 0.5);
+
+                        negResult.output.dispose();
+                        posResult.output.dispose();
+                    } else {
+                        const result = await session.run({ "input": inputTensor });
+                        specPred = result.output.data;
+
+                        result.output.dispose();
+                    }
+                } finally {
+                    buffer.release();
                 }
+
                 const specPredNdarray = np.array(specPred);
                 const sources = separatorInstance.postprocess(skip, specPredNdarray);
                 const sources_js = sources.toJs();
 
-                opt[0] = opt[0].concat(Array.from(sources_js[0]));
-                opt[1] = opt[1].concat(Array.from(sources_js[1]));
-
-                buffer.release();
+            opt[0] = Float32Array.from([...opt[0], ...sources_js[0]]);
+            opt[1] = Float32Array.from([...opt[1], ...sources_js[1]]);
             }
             segmentedMix.destroy();
 
