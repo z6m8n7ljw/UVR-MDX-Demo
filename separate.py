@@ -1,22 +1,21 @@
 
 import numpy as np
-import scipy
 
 def numpy_hann(M, sym=True):
     """
-    使用 NumPy 实现 Hann 窗函数
-    
+    Implements the Hann window function using NumPy.
+
     Parameters:
     -----------
     M : int
-        窗长度
+        Window length
     sym : bool
-        是否对称。True 表示对称窗，False 表示周期窗
+        Whether the window is symmetric. True for symmetric window, False for periodic window.
         
     Returns:
     --------
     w : ndarray
-        Hann 窗系数
+        Hann window coefficients
     """
     if not sym:
         M = M + 1
@@ -28,6 +27,84 @@ def numpy_hann(M, sym=True):
         w = w[:-1]
         
     return w
+
+
+def numpy_stft(x, n_fft, hop, window):
+    """
+    Computes the Short-Time Fourier Transform (STFT) of the input signal using NumPy.
+    
+    Parameters:
+        x: Input signal array of shape (channels, samples)
+        n_fft: Size of FFT window
+        hop: Number of samples between successive frames
+        window: Window function to apply to each frame
+        
+    Returns:
+        Complex STFT coefficients as real/imaginary components with shape 
+        (channels, freq_bins, time_frames, 2)
+    """
+    if x.ndim == 1:
+        x = x[None, :]
+    num_channels, _ = x.shape
+    
+    pad_size = (n_fft // 2, n_fft // 2)
+    x_padded = np.pad(x, ((0, 0), pad_size), mode='reflect')
+    num_frames = (x_padded.shape[1] - n_fft) // hop + 1
+    
+    result = np.zeros((num_channels, n_fft // 2 + 1, num_frames), dtype=np.complex64)
+    
+    for ch in range(num_channels):
+        frames = np.lib.stride_tricks.as_strided(
+            x_padded[ch],
+            shape=(num_frames, n_fft),
+            strides=(hop * x_padded[ch].strides[0], x_padded[ch].strides[0])
+        )
+        
+        windowed_frames = frames * window
+        fft_result = np.fft.rfft(windowed_frames, n=n_fft)
+        result[ch] = fft_result.T
+    
+    return np.stack([result.real, result.imag], axis=-1)
+
+
+def numpy_istft(x, n_fft, hop, window):
+    """
+    Computes the Inverse Short-Time Fourier Transform (ISTFT) to reconstruct the time-domain signal.
+    
+    Parameters:
+        x: STFT coefficients array of shape (channels, freq_bins, time_frames, 2)
+        n_fft: Size of FFT window
+        hop: Number of samples between successive frames
+        window: Window function to apply to each frame
+        
+    Returns:
+        Reconstructed time-domain signal of shape (channels, samples)
+    """
+    x_complex = x[..., 0] + 1j * x[..., 1]
+    
+    num_channels, _, num_frames = x_complex.shape
+    expected_signal_len = (num_frames - 1) * hop + n_fft
+
+    result = np.zeros((num_channels, expected_signal_len), dtype=np.float32)
+    window_buffer = np.zeros((num_channels, expected_signal_len), dtype=np.float32)
+    
+    for ch in range(num_channels):
+        ifft_frames = np.fft.irfft(x_complex[ch].T, n=n_fft)
+
+        ifft_frames *= window
+
+        for frame in range(num_frames):
+            start = frame * hop
+            end = start + n_fft
+            result[ch, start:end] += ifft_frames[frame]
+            window_buffer[ch, start:end] += window ** 2
+
+    result = result / (window_buffer + 1e-6)
+
+    pad = n_fft // 2
+    result = result[:, pad:-pad]
+    
+    return result
 
 
 class ConvTDFNet:
@@ -62,22 +139,23 @@ class ConvTDFNet:
         #     return_complex=True,
         # )
 
-        def compute_stft(segment):
-            f, t, Zxx = scipy.signal.stft(
-                segment,
-                nperseg=self.n_fft,
-                noverlap=self.n_fft - self.hop,
-                window=self.window,
-                return_onesided=True,
-                boundary='zeros',
-            )
-            Zxx *= (np.float32(self.n_fft) / 2.0)
-            return Zxx
+        # def compute_stft(segment):
+        #     f, t, Zxx = scipy.signal.stft(
+        #         segment,
+        #         nperseg=self.n_fft,
+        #         noverlap=self.n_fft - self.hop,
+        #         window=self.window,
+        #         return_onesided=True,
+        #         boundary='zeros',
+        #     )
+        #     Zxx *= (np.float32(self.n_fft) / 2.0)
+        #     return Zxx
 
-        Zxx = np.apply_along_axis(compute_stft, 1, x)
-        Zxx_real = Zxx.real.astype(np.float32)
-        Zxx_imag = Zxx.imag.astype(np.float32)
-        x = np.stack((Zxx_real, Zxx_imag), axis=-1)  # [B, N, T, 2]
+        # Zxx = np.apply_along_axis(compute_stft, 1, x)
+        # Zxx_real = Zxx.real.astype(np.float32)
+        # Zxx_imag = Zxx.imag.astype(np.float32)
+        # x = np.stack((Zxx_real, Zxx_imag), axis=-1)  # [B, N, T, 2]
+        x = numpy_stft(x, self.n_fft, self.hop, self.window)
         # x = x.permute([0, 3, 1, 2])
         x = np.transpose(x, [0, 3, 1, 2])  # [B, 2, N, T]
         # x = x.reshape([-1, 2, 2, self.n_bins, self.dim_t]).reshape([-1, self.dim_c, self.n_bins, self.dim_t])
@@ -103,14 +181,16 @@ class ConvTDFNet:
         x = np.transpose(x, [0, 2, 3, 1])
         # x = x.contiguous()
         # x = torch.view_as_complex(x)
-        x = x[..., 0] + 1j * x[..., 1]
+        # x = x[..., 0] + 1j * x[..., 1]
         # x = torch.istft(
         #     x, n_fft=self.n_fft, hop_length=self.hop, window=self.window, center=True
         # )
-        _, x = scipy.signal.istft(
-            x, nperseg=self.n_fft, noverlap=self.n_fft - self.hop, window=self.window, input_onesided=True
-        )
-        x /= (np.float32(self.n_fft) / 2.0)
+        # _, x = scipy.signal.istft(
+        #     x, nperseg=self.n_fft, noverlap=self.n_fft - self.hop, window=self.window, input_onesided=True
+        # )
+        # x /= (np.float32(self.n_fft) / 2.0)
+        x = numpy_istft(x, self.n_fft, self.hop, self.window)
+
         return x.reshape([-1, c, self.chunk_size])
 
 class Separator:

@@ -183,7 +183,7 @@ async function processAudio() {
             indexURL: "pyodide/",
         });
     
-        await pyodide.loadPackage(['numpy', 'scipy']);
+        await pyodide.loadPackage(['numpy']);
     
         const response = await fetch('separate.py');
         const pythonCode = await response.text();
@@ -242,8 +242,8 @@ async function processAudio() {
                 const sources = separatorInstance.postprocess(skip, specPredNdarray);
                 const sources_js = sources.toJs();
 
-            opt[0] = Float32Array.from([...opt[0], ...sources_js[0]]);
-            opt[1] = Float32Array.from([...opt[1], ...sources_js[1]]);
+                opt[0] = Float32Array.from([...opt[0], ...sources_js[0]]);
+                opt[1] = Float32Array.from([...opt[1], ...sources_js[1]]);
             }
             segmentedMix.destroy();
 

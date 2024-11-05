@@ -1,3 +1,5 @@
+.vscode
+
 /dist
 
 /node_modules
@@ -9,3 +11,7 @@
 /*.wasm
 
 /*.pem
+
+/separated
+
+/__pycache__
