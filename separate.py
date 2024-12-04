@@ -1,6 +1,91 @@
 
 import numpy as np
 
+def print_4d_array_slices(arr, name="Array"):
+    """打印 4 维数组的切片数据
+    Args:
+        arr: 4 维 numpy 数组
+        name: 数组名称
+    """
+    print(f"\nPython {name} output:")
+    print("Shape:", arr.shape)
+    print("\nSlice values:")
+    
+    # 打印第一个和最后一个 batch
+    for batch in [0, arr.shape[0]-1]:
+        print(f"\nBatch {batch}:")
+        
+        # 遍历第二维的前 3 个元素
+        for idx2 in range(3):
+            print(f"\nDim2 index {idx2}:")
+            print(f"Dim3 [0,1,2]: ", end="")
+            for idx3 in range(3):
+                print(f"[{arr[batch, idx2, idx3, 0]}, {arr[batch, idx2, idx3, 1]}] ", end="")
+            print()
+        
+        # 中间的元素
+        mid_idx2 = arr.shape[1]//2
+        print(f"\nMiddle Dim2 indices (around {mid_idx2}):")
+        for idx2 in range(mid_idx2-1, mid_idx2+2):
+            print(f"Dim2 index {idx2}, Dim3 [{arr.shape[2]//2-1},{arr.shape[2]//2},{arr.shape[2]//2+1}]: ", end="")
+            for idx3 in range(arr.shape[2]//2-1, arr.shape[2]//2+2):
+                print(f"[{arr[batch, idx2, idx3, 0]}, {arr[batch, idx2, idx3, 1]}] ", end="")
+            print()
+        
+        # 最后的元素
+        print("\nLast Dim2 indices:")
+        for idx2 in range(arr.shape[1]-3, arr.shape[1]):
+            print(f"Dim2 index {idx2}, Dim3 [{arr.shape[2]-3},{arr.shape[2]-2},{arr.shape[2]-1}]: ", end="")
+            for idx3 in range(arr.shape[2]-3, arr.shape[2]):
+                print(f"[{arr[batch, idx2, idx3, 0]}, {arr[batch, idx2, idx3, 1]}] ", end="")
+            print()
+
+def print_2d_array_slices(arr, name="Array", show_cols=8):
+    """打印 2 维数组的切片数据，只显示每行开头和结尾的部分值
+    
+    Args:
+        arr: 2 维 numpy 数组
+        name: 数组名称
+        show_cols: 每行开头和结尾共显示的列数
+    """
+    print(f"\nPython {name} output:")
+    print(f"Shape: [{arr.shape[0]}, {arr.shape[1]}]")
+    print("\nSlice values:")
+    
+    # 计算每端显示的列数
+    half_show = (show_cols + 1) // 2
+    need_truncate = arr.shape[1] > show_cols
+    
+    # 遍历每一行
+    for i in range(arr.shape[0]):
+        row_str = f"Row {i}: ["
+        
+        # 遍历当前行的列
+        for j in range(arr.shape[1]):
+            # 如果需要截断且在中间范围内
+            if need_truncate and j >= half_show and j < arr.shape[1] - half_show:
+                if j == half_show:
+                    row_str += "..."
+                continue
+            
+            # 添加数值
+            row_str += f"{arr[i, j]}"
+            
+            # 添加逗号（如果不是最后一个打印值）
+            if need_truncate:
+                is_last = (j >= arr.shape[1] - half_show and j == arr.shape[1] - 1) or \
+                         (j < half_show and j == half_show - 1)
+            else:
+                is_last = j == arr.shape[1] - 1
+                
+            if not is_last:
+                row_str += ", "
+                
+        row_str += "]"
+        print(row_str)
+    
+    print()
+
 def numpy_hann(M, sym=True):
     """
     Implements the Hann window function using NumPy.
@@ -49,8 +134,8 @@ def numpy_stft(x, n_fft, hop, window):
     
     pad_size = (n_fft // 2, n_fft // 2)
     x_padded = np.pad(x, ((0, 0), pad_size), mode='reflect')
-    num_frames = (x_padded.shape[1] - n_fft) // hop + 1
     
+    num_frames = (x_padded.shape[1] - n_fft) // hop + 1
     result = np.zeros((num_channels, n_fft // 2 + 1, num_frames), dtype=np.complex64)
     
     for ch in range(num_channels):

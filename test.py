@@ -6,6 +6,8 @@ import onnxruntime as ort
 from pathlib import Path
 from argparse import ArgumentParser
 from separate import *
+import time
+import shutil
 
 def main():
     parser = ArgumentParser()
@@ -15,7 +17,9 @@ def main():
     
     args = parser.parse_args()
 
-    args.output.mkdir(parents=True, exist_ok=True)
+    if args.output.exists():
+        shutil.rmtree(args.output)
+    args.output.mkdir(parents=True)
 
     provider = 'CUDAExecutionProvider' if torch.cuda.is_available() else 'CPUExecutionProvider'
     model = ort.InferenceSession(str(args.model_path), providers=[provider])
@@ -40,14 +44,19 @@ def main():
     for skip, segment in predictor.segment(mix).items():
         spek = predictor.preprocess(segment)
 
+        start_time = time.time()
+        
         if separator_args["denoise"]:
             spec_pred = (
-                - model.run(None, {"input": -spek})[0] * 0.5
-                + model.run(None, {"input": spek})[0] * 0.5
+            - model.run(None, {"input": -spek})[0] * 0.5
+            + model.run(None, {"input": spek})[0] * 0.5
             )
         else:
             spec_pred = model.run(None, {"input": spek})[0]
-
+            
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"Inference time: {int(duration)} s {int((duration % 1) * 1000)} ms")
         bgm_segments.append(predictor.postprocess(skip, spec_pred))
 
     bgm = np.concatenate(bgm_segments, axis=1)
